@@ -23,10 +23,8 @@ class LayerSave(
 object AspkBridge {
 
     fun newProject(name: String, w: Int, h: Int): AspkProject {
-        // Igual a Project.initial() do Animation Studio: 1 frame, cenário (ids 1) e camada de desenho (id 2).
-        fun empty(id: Long, n: String, kind: String) = AspkLayer(
-            AspkLayerMeta(id, n, kind), emptyMap(), emptyMap(),
-        )
+        // Igual a Project.initial() do Animation Studio: 1 frame, cenário (id 1) e camada de desenho (id 2).
+        fun empty(id: Long, n: String, kind: String) = AspkLayer(AspkLayerMeta(id, n, kind), emptyMap(), emptyMap())
         return AspkProject(name, w, h, 12, -1, listOf(0L), 0, listOf(empty(1, "Cenário 1", "SCENERY"), empty(2, "Camada 1", "DRAWING")), 3)
     }
 
@@ -35,16 +33,15 @@ object AspkBridge {
         val doc = PaintDocument(p.width, p.height, p.nextId, p.paperArgb)
         for (l in p.layers) {
             val drawing = l.cels[fid]?.let { l.drawings[it] }
-            val bmp = renderDrawing(drawing, p.width, p.height)
             val kind = if (l.meta.kind == "SCENERY") LayerKind.SCENERY else LayerKind.DRAWING
-            val pl = PaintLayer(l.meta.id, l.meta.name, kind, bmp)
+            val pl = PaintLayer(l.meta.id, l.meta.name, kind, renderDrawing(drawing, p.width, p.height))
             pl.opacity = l.meta.opacityPercent / 100f
             pl.visible = l.meta.visible; pl.locked = l.meta.locked
             pl.blend = BlendKind.values().firstOrNull { it.name == l.meta.blend } ?: BlendKind.NORMAL
             doc.layers.add(pl)
         }
         if (doc.layers.isEmpty()) doc.layers.add(PaintLayer(doc.nextId++, "Camada 1", LayerKind.DRAWING, doc.newBitmap()))
-        doc.activeId = doc.layers.last { it.kind == LayerKind.DRAWING }.id.takeIf { id -> doc.layers.any { it.id == id } } ?: doc.layers.last().id
+        doc.activeId = (doc.layers.lastOrNull { it.kind == LayerKind.DRAWING } ?: doc.layers.last()).id
         return doc
     }
 
@@ -104,7 +101,7 @@ object AspkBridge {
         }
         return AspkProject(
             base.name, base.width, base.height, base.fps, base.paperArgb, base.frameIds, frameIndex,
-            layers, maxOf(next, nextIdIn), "Studio-Paint-AS 0.1.0", base.extras,
+            layers, next, "Studio-Paint-AS 0.1.0", base.extras,
         )
     }
 }

@@ -1,0 +1,49 @@
+name: Android CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Testes unitarios + APK debug (motor Kotlin)
+        run: gradle testDebugUnitTest assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-paint-as-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+  # Experimental: compila tambem o libmypaint nativo. Nao bloqueia o job principal.
+  native:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: NDK e CMake
+        run: sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: APK debug com libmypaint
+        run: gradle assembleDebug -PenableLibMyPaint=true --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-paint-as-debug-apk-libmypaint
+          path: app/build/outputs/apk/debug/*.apk
