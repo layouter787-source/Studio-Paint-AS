@@ -1,65 +1,49 @@
-name: Automatic Build
+name: Android CI
 
 on:
   push:
-    branches:
-      - "**"
-
   pull_request:
-    branches:
-      - "**"
-
   workflow_dispatch:
-
-permissions:
-  contents: read
-
-env:
-  GRADLE_OPTS: >-
-    -Dorg.gradle.jvmargs=-Xmx4g
-    -Dorg.gradle.daemon=false
 
 jobs:
   build:
-    name: Build Android Project
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
-          cache: gradle
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK components
-        run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-35"
-          sdkmanager "build-tools;35.0.0"
-
-      - name: Make Gradle executable
-        run: chmod +x ./gradlew
-
-      - name: Validate Gradle
-        run: ./gradlew --version
-
-      - name: Build project
-        run: ./gradlew build --stacktrace
-
-      - name: Upload build outputs
-        if: always()
-        uses: actions/upload-artifact@v4
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
         with:
-          name: studio-paint-build-${{ github.run_number }}
-          path: |
-            **/build/outputs/apk/**/*.apk
-            **/build/outputs/bundle/**/*.aab
-          if-no-files-found: ignore
-          retention-days: 14
+          gradle-version: 8.9
+      - name: Testes unitarios + APK debug (motor Kotlin)
+        run: gradle testDebugUnitTest assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-paint-as-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+  # Experimental: compila tambem o libmypaint nativo. Nao bloqueia o job principal.
+  native:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: NDK e CMake
+        run: sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: APK debug com libmypaint
+        run: gradle assembleDebug -PenableLibMyPaint=true --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-paint-as-debug-apk-libmypaint
+          path: app/build/outputs/apk/debug/*.apk
