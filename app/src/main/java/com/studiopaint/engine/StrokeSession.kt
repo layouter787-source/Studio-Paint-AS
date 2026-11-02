@@ -5,6 +5,7 @@ import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.Shader
@@ -16,7 +17,7 @@ import kotlin.math.roundToInt
 
 /**
  * Um traço em curso. Usa o motor de dabs em Kotlin, ou o libmypaint nativo quando o preset
- * o pede e a biblioteca está disponível. Ao terminar regista uma entrada de desfazer.
+ * o pede e a biblioteca está disponível. [clip] (seleção) limita onde se pinta; o motor nativo ainda ignora a seleção.
  */
 class StrokeSession(
     private val doc: PaintDocument,
@@ -26,13 +27,14 @@ class StrokeSession(
     private val size: Float,
     private val opacity: Float,
     private val erase: Boolean,
+    private val clip: Path? = null,
 ) {
     val points = ArrayList<AspkPoint>()
     private val snapshot: Bitmap = layer.bitmap.copy(Bitmap.Config.ARGB_8888, false)
     private var minX = Int.MAX_VALUE; private var minY = Int.MAX_VALUE
     private var maxX = Int.MIN_VALUE; private var maxY = Int.MIN_VALUE
 
-    private val useNative = preset.mypaint != null && NativeMyPaint.available
+    private val useNative = preset.mypaint != null && NativeMyPaint.available && clip == null
     private var handle = 0L
     private var target: Canvas? = null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -61,6 +63,7 @@ class StrokeSession(
                 target = Canvas(b); paint.blendMode = BlendMode.SRC_OVER
                 doc.liveLayerId = layer.id; doc.liveOpacity = opacity
             }
+            clip?.let { target!!.clipPath(it) }
             stamp(x, y, p)
         }
         doc.bump()
@@ -151,7 +154,9 @@ class StrokeSession(
             val b = doc.strokeBuffer
             if (b != null && dirty != null) {
                 val p = Paint().apply { alpha = (opacity * 255).roundToInt() }
-                Canvas(layer.bitmap).drawBitmap(b, dirty, dirty, p)
+                val c = Canvas(layer.bitmap)
+                clip?.let { c.clipPath(it) }
+                c.drawBitmap(b, dirty, dirty, p)
             }
         }
         doc.liveLayerId = -1L

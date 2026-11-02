@@ -1,19 +1,24 @@
 package com.studiopaint.ui
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Path
+import android.graphics.PorterDuff
 import android.graphics.Rect
+import android.graphics.RectF
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import com.studiopaint.domain.Pt
 import com.studiopaint.domain.ViewTransform
 import com.studiopaint.engine.AspkBridge
+import com.studiopaint.engine.BlendKind
 import com.studiopaint.engine.BrushLibrary
-import com.studiopaint.engine.BrushPreset
 import com.studiopaint.engine.Compositor
 import com.studiopaint.engine.FloodFill
 import com.studiopaint.engine.LayerKind
@@ -34,8 +39,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sin
 
-enum class Tool { BRUSH, ERASER, FILL, EYEDROPPER, HAND }
+enum class Tool { BRUSH, ERASER, LASSO }
+enum class ShapeMode { NONE, LINE, RECT, ELLIPSE }
 enum class SaveStatus { SAVED, SAVING, ERROR }
 
 class EditorState(
@@ -58,6 +70,19 @@ class EditorState(
     var transform by mutableStateOf(ViewTransform())
     var message by mutableStateOf<String?>(null)
     var saveStatus by mutableStateOf(SaveStatus.SAVED)
+    var fitMargin = 80f
+
+    // formas, régua, referência, seleção, conta-gotas
+    var shapeMode by mutableStateOf(ShapeMode.NONE)
+    var rulerOn by mutableStateOf(false)
+    var rulerA by mutableStateOf(Pt(0f, 0f))
+    var rulerB by mutableStateOf(Pt(0f, 0f))
+    var refImage by mutableStateOf<Bitmap?>(null)
+    var refVisible by mutableStateOf(false)
+    var selection by mutableStateOf<Path?>(null)
+    var selectionRev by mutableIntStateOf(0)
+    val lassoDraft = mutableStateListOf<Pt>()
+    var eyedropAt by mutableStateOf<Offset?>(null)
 
     private var session: StrokeSession? = null
     private var fitted = false
@@ -65,46 +90,200 @@ class EditorState(
     private var viewH = 0f
     private var saveJob: Job? = null
     private val saveMutex = Mutex()
+    private var snapping = false
+    private var shapeStart: Pt? = null
+    private var shapeLast: Pt? = null
+    private var rulerGrab = Pt(0f, 0f)
 
     fun onViewSize(w: Float, h: Float) {
         viewW = w; viewH = h
         if (!fitted && w > 0f && h > 0f) { fitToView(); fitted = true }
     }
 
-    fun fitToView() { if (viewW > 0f) transform = ViewTransform.fit(doc.width, doc.height, viewW, viewH) }
+    fun fitToView() { if (viewW > 0f) transform = ViewTransform.fit(doc.width, doc.height, viewW, viewH, fitMargin) }
 
-    // ---------- desenho ----------
+    private fun activeDrawable(): PaintLayer? {
+        val layer = doc.active ?: return null
+        if (!layer.visible || layer.locked) { message = "A camada está oculta ou bloqueada"; return null }
+        return layer
+    }
+
+    // ---------- régua ----------
+    fun toggleRuler() {
+        rulerOn = !rulerOn
+        if (rulerOn && rulerA == rulerB) {
+            rulerA = Pt(doc.width * 0.2f, doc.height * 0.5f); rulerB = Pt(doc.width * 0.8f, doc.height * 0.5f)
+        }
+    }
+
+    /** 1 = ponto A, 2 = ponto B, 3 = corpo, 0 = nada. [r] em pixels de ecrã. */
+    fun hitRuler(screen: Pt, r: Float): Int {
+        if (!rulerOn) return 0
+        val a = transform.docToScreen(rulerA); val b = transform.docToScreen(rulerB)
+        if (hypot(screen.x - a.x, screen.y - a.y) <= r) { rulerGrab = transform.screenToDoc(screen); return 1 }
+        if (hypot(screen.x - b.x, screen.y - b.y) <= r) { rulerGrab = transform.screenToDoc(screen); return 2 }
+        val dx = b.x - a.x; val dy = b.y - a.y
+        val len2 = dx * dx + dy * dy
+        if (len2 > 1f) {
+            val t = (((screen.x - a.x) * dx + (screen.y - a.y) * dy) / len2).coerceIn(0f, 1f)
+            if (hypot(screen.x - (a.x + t * dx), screen.y - (a.y + t * dy)) <= r * 0.7f) { rulerGrab = transform.screenToDoc(screen); return 3 }
+        }
+        return 0
+    }
+
+    fun dragRuler(hit: Int, screen: Pt) {
+        val d = transform.screenToDoc(screen)
+        when (hit) {
+            1 -> rulerA = d
+            2 -> rulerB = d
+            3 -> {
+                val dx = d.x - rulerGrab.x; val dy = d.y - rulerGrab.y
+                rulerA = Pt(rulerA.x + dx, rulerA.y + dy); rulerB = Pt(rulerB.x + dx, rulerB.y + dy); rulerGrab = d
+            }
+        }
+    }
+
+    private fun distToLine(p: Pt): Float {
+        val dx = rulerB.x - rulerA.x; val dy = rulerB.y - rulerA.y
+        val len = hypot(dx, dy)
+        if (len < 1f) return Float.MAX_VALUE
+        return kotlin.math.abs((p.x - rulerA.x) * dy - (p.y - rulerA.y) * dx) / len
+    }
+
+    private fun snapPt(p: Pt): Pt {
+        if (!snapping) return p
+        val dx = rulerB.x - rulerA.x; val dy = rulerB.y - rulerA.y
+        val len2 = dx * dx + dy * dy
+        if (len2 < 1f) return p
+        val t = ((p.x - rulerA.x) * dx + (p.y - rulerA.y) * dy) / len2
+        return Pt(rulerA.x + t * dx, rulerA.y + t * dy)
+    }
+
+    // ---------- traço livre ----------
     fun beginStroke(p: Pt, pressure: Float): Boolean {
-        val layer = doc.active ?: return false
-        if (!layer.visible || layer.locked) { message = "A camada está oculta ou bloqueada"; return false }
-        val s = StrokeSession(doc, layer, preset, color, brushSize, brushOpacity, tool == Tool.ERASER)
-        s.down(p.x, p.y, pressure)
+        val layer = activeDrawable() ?: return false
+        snapping = rulerOn && distToLine(p) <= 56f / transform.scale
+        val q = snapPt(p)
+        val s = StrokeSession(doc, layer, preset, color, brushSize, brushOpacity, tool == Tool.ERASER, selection)
+        s.down(q.x, q.y, pressure)
         session = s
         return true
     }
 
-    fun strokeTo(p: Pt, pressure: Float) { session?.move(p.x, p.y, pressure) }
+    fun strokeTo(p: Pt, pressure: Float) { val q = snapPt(p); session?.move(q.x, q.y, pressure) }
 
     fun endStroke() {
-        session?.up(); session = null
+        session?.up(); session = null; snapping = false
         if (tool == Tool.BRUSH) pushRecent(color)
         markDirty()
     }
 
-    fun cancelStroke() { session?.cancel(); session = null }
+    fun cancelStroke() { session?.cancel(); session = null; snapping = false }
 
-    fun tap(p: Pt) {
-        val x = p.x.toInt(); val y = p.y.toInt()
-        when (tool) {
-            Tool.FILL -> fill(x, y)
-            Tool.EYEDROPPER -> { color = Compositor.sample(doc, x, y); tool = Tool.BRUSH }
-            else -> {}
+    // ---------- formas ----------
+    fun beginShape(p: Pt): Boolean {
+        if (activeDrawable() == null) return false
+        shapeStart = p; shapeLast = null
+        return true
+    }
+
+    fun updateShape(p: Pt) {
+        val a = shapeStart ?: return
+        val last = shapeLast
+        if (last != null && hypot(p.x - last.x, p.y - last.y) * transform.scale < 1.5f) return
+        shapeLast = p
+        val layer = activeDrawable() ?: return
+        session?.cancel(); session = null
+        val verts = shapeVertices(shapeMode, a, p)
+        if (verts.size < 2) return
+        val s = StrokeSession(doc, layer, preset.copy(smoothing = 0f, mypaint = null), color, brushSize, brushOpacity, tool == Tool.ERASER, selection)
+        s.down(verts[0].x, verts[0].y, 1f)
+        for (i in 1 until verts.size) s.move(verts[i].x, verts[i].y, 1f)
+        session = s
+    }
+
+    fun endShape() {
+        session?.up(); session = null; shapeStart = null; shapeLast = null
+        if (tool == Tool.BRUSH) pushRecent(color)
+        markDirty()
+    }
+
+    fun cancelShape() { session?.cancel(); session = null; shapeStart = null; shapeLast = null }
+
+    private fun shapeVertices(mode: ShapeMode, a: Pt, b: Pt): List<Pt> = when (mode) {
+        ShapeMode.LINE -> listOf(a, b)
+        ShapeMode.RECT -> listOf(a, Pt(b.x, a.y), b, Pt(a.x, b.y), a)
+        ShapeMode.ELLIPSE -> {
+            val cx = (a.x + b.x) / 2f; val cy = (a.y + b.y) / 2f
+            val rx = kotlin.math.abs(b.x - a.x) / 2f; val ry = kotlin.math.abs(b.y - a.y) / 2f
+            (0..96).map { i -> val t = (i / 96.0 * 2 * PI); Pt(cx + rx * cos(t).toFloat(), cy + ry * sin(t).toFloat()) }
         }
+        ShapeMode.NONE -> emptyList()
+    }
+
+    // ---------- laço / seleção ----------
+    fun lassoBegin(p: Pt) { lassoDraft.clear(); lassoDraft.add(p) }
+    fun lassoAdd(p: Pt) { lassoDraft.add(p) }
+    fun lassoCancel() { lassoDraft.clear() }
+    fun lassoEnd() {
+        if (lassoDraft.size >= 3) {
+            val path = Path()
+            path.moveTo(lassoDraft[0].x, lassoDraft[0].y)
+            for (i in 1 until lassoDraft.size) path.lineTo(lassoDraft[i].x, lassoDraft[i].y)
+            path.close()
+            selection = path
+        } else {
+            selection = null
+        }
+        selectionRev++
+        lassoDraft.clear()
+    }
+
+    fun deselect() { selection = null; selectionRev++ }
+    fun invertSelection() { selection?.let { s -> s.toggleInverseFillType(); selectionRev++ } }
+
+    private fun selectionRect(sel: Path): Rect {
+        if (sel.isInverseFillType) return Rect(0, 0, doc.width, doc.height)
+        val rf = RectF(); sel.computeBounds(rf, true)
+        val r = Rect(rf.left.toInt() - 1, rf.top.toInt() - 1, rf.right.toInt() + 2, rf.bottom.toInt() + 2)
+        return if (r.intersect(0, 0, doc.width, doc.height)) r else Rect(0, 0, doc.width, doc.height)
+    }
+
+    fun fillSelection() = editSelection(false)
+    fun clearSelectionContent() = editSelection(true)
+
+    private fun editSelection(erase: Boolean) {
+        val layer = activeDrawable() ?: return
+        val sel = selection ?: return
+        val snap = layer.bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        val c = Canvas(layer.bitmap)
+        c.save(); c.clipPath(sel)
+        if (erase) c.drawColor(0, PorterDuff.Mode.CLEAR) else c.drawColor(color or (0xFF shl 24))
+        c.restore()
+        doc.recordPixels(layer, snap, selectionRect(sel))
+        snap.recycle()
+        if (!erase) pushRecent(color)
+        markDirty()
+    }
+
+    // ---------- conta-gotas (toque longo) ----------
+    fun eyedrop(screen: Offset) {
+        val d = transform.screenToDoc(Pt(screen.x, screen.y))
+        color = Compositor.sample(doc, d.x.toInt(), d.y.toInt())
+        eyedropAt = screen
+    }
+
+    fun eyedropEnd() { eyedropAt = null; pushRecent(color) }
+
+    // ---------- balde / gota de cor ----------
+    /** Largar a gota de cor num ponto do ecrã. */
+    fun colorDropAt(screen: Offset) {
+        val d = transform.screenToDoc(Pt(screen.x, screen.y))
+        fill(d.x.toInt(), d.y.toInt())
     }
 
     private fun fill(x: Int, y: Int) {
-        val layer = doc.active ?: return
-        if (!layer.visible || layer.locked) { message = "A camada está oculta ou bloqueada"; return }
+        val layer = activeDrawable() ?: return
         val w = doc.width; val h = doc.height
         val fillColor = color or (0xFF shl 24)
         scope.launch {
@@ -149,6 +328,7 @@ class EditorState(
     }
 
     private class Snap(val layer: PaintLayer, val version: Int, val png: ByteArray?, val copy: Bitmap?)
+    private class LayerInfo(val id: Long, val name: String, val kind: LayerKind, val opacity: Float, val visible: Boolean, val blend: BlendKind, val locked: Boolean)
 
     suspend fun saveNow() = withContext(NonCancellable) {
         saveMutex.withLock {
@@ -180,8 +360,6 @@ class EditorState(
             }
         }
     }
-
-    private class LayerInfo(val id: Long, val name: String, val kind: LayerKind, val opacity: Float, val visible: Boolean, val blend: com.studiopaint.engine.BlendKind, val locked: Boolean)
 
     private fun encodePng(b: Bitmap): ByteArray = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
 
