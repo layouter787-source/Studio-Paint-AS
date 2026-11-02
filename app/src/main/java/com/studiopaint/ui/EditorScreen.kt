@@ -204,8 +204,13 @@ private fun EditorContent(st: EditorState, ctx: Context, onClose: () -> Unit) {
         }
 
         if (topHidden || toolsHidden) {
-            Surface(Modifier.align(Alignment.BottomStart).padding(16.dp).size(48.dp), shape = CircleShape, color = Color(0xE6272B33), tonalElevation = 6.dp,
-                onClick = { topHidden = false; toolsHidden = false; prefs.edit().putBoolean("top_hidden", false).putBoolean("tools_hidden", false).apply() }) {
+            Surface(
+                onClick = { topHidden = false; toolsHidden = false; prefs.edit().putBoolean("top_hidden", false).putBoolean("tools_hidden", false).apply() },
+                modifier = Modifier.align(Alignment.BottomStart).padding(16.dp).size(48.dp),
+                shape = CircleShape,
+                color = Color(0xE6272B33),
+                tonalElevation = 6.dp,
+            ) {
                 Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Menu, "Mostrar barras") }
             }
         }
@@ -229,8 +234,6 @@ private fun EditorContent(st: EditorState, ctx: Context, onClose: () -> Unit) {
     }
 }
 
-private fun androidx.compose.foundation.layout.RowScope.weightPlaceholder() {}
-
 @Composable
 private fun ToolButton(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: String, active: Boolean, onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.padding(2.dp).then(if (active) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f), RoundedCornerShape(12.dp)) else Modifier)) {
@@ -252,7 +255,7 @@ private fun FloatingBar(
     )
     val pos = clamp(off)
     Surface(
-        Modifier.offset { IntOffset(pos.x.roundToInt(), pos.y.roundToInt()) }.onSizeChanged { size = it },
+        modifier = Modifier.offset { IntOffset(pos.x.roundToInt(), pos.y.roundToInt()) }.onSizeChanged { size = it },
         shape = RoundedCornerShape(16.dp), color = Color(0xE6272B33), tonalElevation = 6.dp,
     ) {
         val handle: @Composable () -> Unit = {

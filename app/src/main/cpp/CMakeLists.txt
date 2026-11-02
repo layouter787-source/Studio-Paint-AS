@@ -22,8 +22,12 @@ add_library(mypaint_core STATIC
     ${MP}/mypaint-surface.c
     ${MP}/helpers.c
     ${MP}/rng-double.c)
-target_include_directories(mypaint_core PUBLIC ${MP} ${CMAKE_CURRENT_SOURCE_DIR}/shim)
-target_compile_definitions(mypaint_core PRIVATE HAVE_CONFIG_H=1)
+
+# O shim vem ANTES do código da libmypaint: o nosso config.h/mypaint-config.h desliga GLib e gettext,
+# que não existem no NDK (erros 'glib.h' e 'libintl.h' not found).
+target_include_directories(mypaint_core BEFORE PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/shim)
+target_include_directories(mypaint_core PUBLIC ${MP})
+target_compile_definitions(mypaint_core PRIVATE HAVE_CONFIG_H=1 ENABLE_NLS=0 MYPAINT_CONFIG_USE_GLIB=0)
 target_compile_options(mypaint_core PRIVATE -w -fPIC)
 
 add_library(studiopaint_native SHARED native_bridge.cpp)
