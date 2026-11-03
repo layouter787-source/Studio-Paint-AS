@@ -71,7 +71,10 @@ fun dsSliderColors() = SliderDefaults.colors(
     thumbColor = Ds.accentB, activeTrackColor = Ds.accentA, inactiveTrackColor = Color(0xFF3A3E47),
 )
 
-/** Botão quadrado arredondado (squircle) com estado ativo em gradiente. */
+/**
+ * Botão quadrado arredondado (squircle) com estado ativo em gradiente.
+ * [onClick] é o último parâmetro para poder ser usado como lambda final.
+ */
 @Composable
 fun SquircleButton(
     icon: ImageVector?,
@@ -80,8 +83,8 @@ fun SquircleButton(
     active: Boolean = false,
     enabled: Boolean = true,
     size: Dp = 46.dp,
-    onClick: () -> Unit,
     content: (@Composable BoxScope.() -> Unit)? = null,
+    onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(14.dp)
     Box(

@@ -51,7 +51,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -82,7 +81,9 @@ import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -295,7 +296,7 @@ private fun ColorOrb(color: Int, active: Boolean, onTap: () -> Unit, onDrag: (Of
         Modifier.size(46.dp)
             .shadow(if (active) 12.dp else 6.dp, CircleShape, ambientColor = Color.Black, spotColor = if (active) Ds.accentA else Color.Black)
             .clip(CircleShape).background(Ds.surfaceBrush).border(1.dp, if (active) Color(0x88FFFFFF) else Ds.stroke, CircleShape)
-            .androidx_onGloballyPositioned { origin = it }
+            .onGloballyPositioned { origin = it.positionInRoot() }
             .pointerInput(Unit) { detectTapGestures { onTap() } }
             .pointerInput(Unit) {
                 detectDragGestures(
@@ -310,19 +311,12 @@ private fun ColorOrb(color: Int, active: Boolean, onTap: () -> Unit, onDrag: (Of
     }
 }
 
-private fun Modifier.androidx_onGloballyPositioned(set: (Offset) -> Unit): Modifier =
-    this.then(Modifier.onGloballyPositionedRoot(set))
-
-private fun Modifier.onGloballyPositionedRoot(set: (Offset) -> Unit): Modifier =
-    androidx.compose.ui.layout.onGloballyPositioned { set(it.positionInRoot()) }.let { f -> this.then(f) }
-
 @Composable
 private fun EditorCanvas(st: EditorState) {
     val matrix = remember { Matrix() }
     val shadowPaint = remember { APaint().apply { style = APaint.Style.FILL; color = AColor.argb(12, 0, 0, 0) } }
     val antA = remember { APaint().apply { style = APaint.Style.STROKE; color = AColor.WHITE } }
     val antB = remember { APaint().apply { style = APaint.Style.STROKE; color = AColor.BLACK } }
-    val density = LocalDensity.current
     Canvas(
         Modifier.fillMaxSize()
             .onSizeChanged { st.onViewSize(it.width.toFloat(), it.height.toFloat()) }
@@ -373,7 +367,7 @@ private fun EditorCanvas(st: EditorState) {
             }
         }
         st.eyedropAt?.let { p ->
-            val c = Offset(p.x, p.y - 110.dp.toPx() / 2f)
+            val c = Offset(p.x, p.y - 55.dp.toPx())
             drawCircle(Color(st.color or (0xFF shl 24)), 34.dp.toPx(), c)
             drawCircle(Color.White, 34.dp.toPx(), c, style = Stroke(4.dp.toPx()))
             drawCircle(Color.Black, 6.dp.toPx(), p, style = Stroke(2.dp.toPx()))
@@ -404,9 +398,13 @@ private suspend fun PointerInputScope.handleGestures(st: EditorState) {
             if (rulerHit != 0) mode = GMode.RULER
         }
         if (mode == null) {
-            if (st.tool == Tool.LASSO) { st.lassoBegin(doc(down.position)); mode = GMode.LASSO }
-            else if (brushLike && st.shapeMode != ShapeMode.NONE) { if (st.beginShape(doc(down.position))) mode = GMode.SHAPE }
-            else if (brushLike) { if (st.beginStroke(doc(down.position), pressureOf(down))) mode = GMode.DRAW }
+            if (st.tool == Tool.LASSO) {
+                st.lassoBegin(doc(down.position)); mode = GMode.LASSO
+            } else if (brushLike && st.shapeMode != ShapeMode.NONE) {
+                if (st.beginShape(doc(down.position))) mode = GMode.SHAPE
+            } else if (brushLike) {
+                if (st.beginStroke(doc(down.position), pressureOf(down))) mode = GMode.DRAW
+            }
         }
         var moved = false; var multi = false; var holdDone = false
         var travel = 0f
@@ -552,8 +550,8 @@ private fun ColorPanel(st: EditorState) {
 
 @Composable
 private fun SelectionPanel(st: EditorState) {
-    val has = st.selection != null
     @Suppress("UNUSED_VARIABLE") val rev = st.selectionRev
+    val has = st.selection != null
     Text(
         if (has) "Pincel e borracha só atuam dentro da seleção." else "Desenhe um laço na folha para criar uma seleção.",
         color = Ds.inkDim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 10.dp),
